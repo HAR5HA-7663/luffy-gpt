@@ -13,3 +13,4 @@ plotly
 spacy
 tiktoken
 torch~=2.6.0
+gradio
