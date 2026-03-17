@@ -13,17 +13,26 @@ class Head(nn.Module):
         self.register_buffer('tril', torch.tril(torch.ones(context_size, context_size)))
         self.dropout = nn.Dropout(0.2)
 
-    def forward(self, x):
+    def forward(self, x, kv_cache=None):
         B, T, C = x.shape
         k = self.key(x)
         q = self.query(x)
+        v = self.value(x)
+
+        if kv_cache is not None:
+            k_prev, v_prev = kv_cache
+            k = torch.cat([k_prev, k], dim=1)
+            v = torch.cat([v_prev, v], dim=1)
+
+        new_cache = (k, v)
+        T_full = k.shape[1]
+
         wei = q @ k.transpose(-2, -1) * C**-0.5
-        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
+        wei = wei.masked_fill(self.tril[T_full-T:T_full, :T_full] == 0, float('-inf'))
         wei = F.softmax(wei, dim=-1)
         wei = self.dropout(wei)
-        v = self.value(x)
         out = wei @ v
-        return out
+        return out, new_cache
 
 
 class MultiHeadAttention(nn.Module):
@@ -34,11 +43,15 @@ class MultiHeadAttention(nn.Module):
         self.proj = nn.Linear(head_size * num_heads, n_embd)
         self.dropout = nn.Dropout(0.2)
 
-    def forward(self, x):
-        out = torch.cat([h(x) for h in self.heads], dim=-1)
+    def forward(self, x, kv_cache=None):
+        if kv_cache is None:
+            kv_cache = [None] * len(self.heads)
+        results = [h(x, c) for h, c in zip(self.heads, kv_cache)]
+        outs, new_caches = zip(*results)
+        out = torch.cat(list(outs), dim=-1)
         out = self.proj(out)
         out = self.dropout(out)
-        return out
+        return out, list(new_caches)
 
 
 class FeedFoward(nn.Module):
@@ -66,28 +79,47 @@ class Block(nn.Module):
         self.ln1 = nn.LayerNorm(n_embd)
         self.ln2 = nn.LayerNorm(n_embd)
 
-    def forward(self, x):
-        x = x + self.sa(self.ln1(x))
+    def forward(self, x, kv_cache=None):
+        sa_out, new_cache = self.sa(self.ln1(x), kv_cache)
+        x = x + sa_out
         x = x + self.ffwd(self.ln2(x))
-        return x
+        return x, new_cache
 
 
 class GPT(nn.Module):
 
     def __init__(self, vocab_size, n_embd=32, context_size=8, n_head=4, n_layer=4):
         super().__init__()
+        self.context_size = context_size
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(context_size, n_embd)
-        self.blocks = nn.Sequential(*[Block(n_embd, n_head=n_head, context_size=context_size) for _ in range(n_layer)])
+        self.blocks = nn.ModuleList([Block(n_embd, n_head=n_head, context_size=context_size) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd)
         self.ln_head = nn.Linear(n_embd, vocab_size)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, use_cache=False, kv_cache=None):
         B, T = idx.shape
+
+        past_len = 0
+        if kv_cache is not None and kv_cache[0] is not None:
+            past_len = kv_cache[0][0][0].shape[1]
+
         tok_emb = self.token_embedding_table(idx)
-        pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device))
+        pos_emb = self.position_embedding_table(torch.arange(past_len, past_len + T, device=idx.device))
         x = tok_emb + pos_emb
-        x = self.blocks(x)
+
+        if use_cache:
+            if kv_cache is None:
+                kv_cache = [None] * len(self.blocks)
+            new_caches = []
+            for block, cache in zip(self.blocks, kv_cache):
+                x, new_cache = block(x, cache)
+                new_caches.append(new_cache)
+        else:
+            new_caches = None
+            for block in self.blocks:
+                x, _ = block(x)
+
         x = self.ln_f(x)
         logits = self.ln_head(x)
 
@@ -99,7 +131,36 @@ class GPT(nn.Module):
         else:
             loss = None
 
+        if use_cache:
+            return logits, loss, new_caches
         return logits, loss
+
+    def generate(self, start_idx, number_of_tokens, use_cache=False):
+        idx = start_idx
+        if use_cache:
+            kv_cache = None
+            for _ in range(number_of_tokens):
+                if kv_cache is not None and kv_cache[0][0][0].shape[1] >= self.context_size:
+                    kv_cache = None
+                if kv_cache is not None:
+                    logits, _, kv_cache = self(idx[:, -1:], use_cache=True, kv_cache=kv_cache)
+                else:
+                    idx_input = idx[:, -self.context_size:]
+                    if idx_input.shape[1] < self.context_size:
+                        logits, _, kv_cache = self(idx_input, use_cache=True)
+                    else:
+                        logits, _ = self(idx_input)
+                logits = logits[:, -1, :]
+                probs = F.softmax(logits, dim=-1)
+                idx = torch.cat((idx, torch.multinomial(probs, num_samples=1)), dim=1)
+        else:
+            for _ in range(number_of_tokens):
+                idx_cond = idx[:, -self.context_size:]
+                logits, _ = self(idx_cond)
+                logits = logits[:, -1, :]
+                probs = F.softmax(logits, dim=-1)
+                idx = torch.cat((idx, torch.multinomial(probs, num_samples=1)), dim=1)
+        return idx
 
 
 def load_dataset(path, use_bpe=False):
