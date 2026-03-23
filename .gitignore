@@ -2,7 +2,18 @@ venv/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+
+# datasets too big for github
 dataset/one-pace-subtitles/
 dataset/onepace_all_dialogue.txt
 dataset/onepace_conversational.txt
 dataset/luffy_dataset.txt
+luffy_dataset.txt
+
+# model weights (hosted on HuggingFace)
+*.pth
+
+# private notes
+commands.txt
+model_dev.txt
+CLAUDE.md
