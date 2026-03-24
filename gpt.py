@@ -137,9 +137,11 @@ class GPTWithStyle(nn.Module):
 
     @torch.no_grad()
     def generate(self, start_idx, style, number_of_tokens,
-                 temperature=1.0, top_k=0, top_p=0.0, repetition_penalty=1.0):
+                 temperature=1.0, top_k=0, top_p=0.0, repetition_penalty=1.0,
+                 eos_tokens=None):
         self.eval()
         idx = start_idx
+        prompt_len = start_idx.shape[1]
         kv_cache = None
         for _ in range(number_of_tokens):
             if kv_cache is not None and kv_cache[0][0][0].shape[1] >= self.context_size:
@@ -151,8 +153,16 @@ class GPTWithStyle(nn.Module):
                 logits, _, kv_cache = self(idx_in, style, use_cache=True)
             logits = _apply_sampling(logits, idx, temperature, top_k, top_p, repetition_penalty)
             probs = F.softmax(logits, dim=-1)
-            idx = torch.cat([idx, torch.multinomial(probs, 1)], dim=1)
-        return idx
+            next_tok = torch.multinomial(probs, 1)
+            idx = torch.cat([idx, next_tok], dim=1)
+            # stop at EOS if detected in generated text
+            if eos_tokens is not None:
+                generated = idx[0, prompt_len:].tolist()
+                gen_str = ''.join([chr(t) if t < 128 else '' for t in generated])
+                if '<EOS>' in gen_str:
+                    break
+        # return only the generated portion (not the prompt)
+        return idx[:, prompt_len:]
 
 
 class GPT(nn.Module):
@@ -572,6 +582,7 @@ if __name__ == '__main__':
             model.load_state_dict(ckpt)
             print(f'loaded finetuned model: {args.eval} (style={args.style})')
             style_t = torch.tensor([args.style], dtype=torch.long, device=device)
+            eos_tokens = encode('<EOS>')
 
             if args.interactive:
                 print('interactive chat — enter a message (ctrl+c to quit)\n')
@@ -581,14 +592,12 @@ if __name__ == '__main__':
                         prompt = f'USER: {user_input}\nLUFFY:'
                         idx = torch.tensor([encode(prompt)], dtype=torch.long, device=device)
                         out = model.generate(idx, style_t, args.tokens,
-                                             args.temperature, args.top_k, args.top_p, args.repetition_penalty)
+                                             args.temperature, args.top_k, args.top_p, args.repetition_penalty,
+                                             eos_tokens=eos_tokens)
                         result = decode(out[0].tolist())
-                        luffy_idx = result.rfind('LUFFY:')
-                        if luffy_idx != -1:
-                            response = result[luffy_idx + 6:].split('\nUSER:')[0].strip()
-                        else:
-                            response = result[-200:]
-                        print(f'Luffy: {response}\n')
+                        # clean up: remove <EOS> and anything after USER:
+                        result = result.split('<EOS>')[0].split('\nUSER:')[0].strip()
+                        print(f'Luffy: {result}\n')
                     except KeyboardInterrupt:
                         print('\nexiting')
                         break
@@ -596,8 +605,11 @@ if __name__ == '__main__':
                 prompt = args.prompt or 'USER: Who are you?\nLUFFY:'
                 idx = torch.tensor([encode(prompt)], dtype=torch.long, device=device)
                 out = model.generate(idx, style_t, args.tokens,
-                                     args.temperature, args.top_k, args.top_p, args.repetition_penalty)
-                print(decode(out[0].tolist()))
+                                     args.temperature, args.top_k, args.top_p, args.repetition_penalty,
+                                     eos_tokens=eos_tokens)
+                result = decode(out[0].tolist())
+                result = result.split('<EOS>')[0].split('\nUSER:')[0].strip()
+                print(result)
         else:
             model = build_model(vocab_size, args, device)
             base = model.module if isinstance(model, nn.DataParallel) else model

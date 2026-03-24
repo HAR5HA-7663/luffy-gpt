@@ -2,7 +2,7 @@ import gradio as gr
 import torch
 import torch.nn.functional as F
 from huggingface_hub import hf_hub_download
-from gpt import GPT
+from gpt import GPTWithStyle, _apply_sampling
 
 device = 'cpu'
 
@@ -16,41 +16,43 @@ idx_to_char = {i: ch for i, ch in enumerate(characters)}
 encode = lambda xs: [char_to_idx[x] for x in xs if x in char_to_idx]
 decode = lambda xs: ''.join([idx_to_char[x] for x in xs])
 
-model_path = hf_hub_download(repo_id='HAR5HA-YELLELA/luffy-gpt', filename='luffy_gpt.pth')
-model = GPT(vocab_size, n_embd=384, context_size=256, n_head=6, n_layer=6).to(device)
+model_path = hf_hub_download(repo_id='HAR5HA-YELLELA/luffy-gpt', filename='luffy_gpt_finetuned.pth')
+model = GPTWithStyle(vocab_size, n_embd=384, context_size=256, n_head=6, n_layer=6, n_styles=2).to(device)
 model.load_state_dict(torch.load(model_path, map_location=device))
 model.eval()
 
+style_t = torch.tensor([1], dtype=torch.long, device=device)
+eos_tokens = encode('<EOS>')
 
-def generate(prompt, num_tokens):
-    if prompt:
-        idx = torch.tensor([encode(prompt)], dtype=torch.long, device=device)
-    else:
-        idx = torch.zeros((1, 1), dtype=torch.long, device=device)
-    with torch.no_grad():
-        for _ in range(int(num_tokens)):
-            idx_cond = idx[:, -256:]
-            logits, _ = model(idx_cond)
-            logits = logits[:, -1, :]
-            probs = F.softmax(logits, dim=-1)
-            idx_next = torch.multinomial(probs, num_samples=1)
-            idx = torch.cat((idx, idx_next), dim=1)
-    return decode(idx[0].tolist())
+
+def chat(user_message):
+    prompt = f'USER: {user_message}\nLUFFY:'
+    idx = torch.tensor([encode(prompt)], dtype=torch.long, device=device)
+    out = model.generate(idx, style_t, number_of_tokens=150,
+                         temperature=0.5, top_k=30, top_p=0.85, repetition_penalty=1.2,
+                         eos_tokens=eos_tokens)
+    result = decode(out[0].tolist())
+    result = result.split('<EOS>')[0].split('\nUSER:')[0].strip()
+    return result
 
 
 demo = gr.Interface(
-    fn=generate,
-    inputs=[
-        gr.Textbox(label='Prompt', placeholder='Luffy:', lines=2),
-        gr.Slider(50, 500, value=200, step=50, label='Tokens to generate'),
-    ],
-    outputs=gr.Textbox(label='Generated text', lines=10),
+    fn=chat,
+    inputs=gr.Textbox(label='Ask Luffy', placeholder='Who are you?', lines=2),
+    outputs=gr.Textbox(label='Luffy says', lines=5),
     title='Luffy GPT',
-    description='GPT trained on One Piece dialogue. Type a prompt and see what happens.',
+    description='10.8M param GPT trained from scratch on One Piece dialogue, fine-tuned with 5k SFT pairs. Not a perfect chatbot -- works best with direct questions.',
     examples=[
-        ['Luffy:', 200],
-        ['Zoro:', 200],
-        ['Nami:', 200],
+        ['Who are you?'],
+        ['What is your dream?'],
+        ['Are you hungry?'],
+        ['Are you scared?'],
+        ['Who is Zoro?'],
+        ["What's your favourite food?"],
+        ['Who is Shanks?'],
+        ['What happened to Ace?'],
+        ['Are you a hero?'],
+        ['Do you like parties?'],
     ]
 )
 
