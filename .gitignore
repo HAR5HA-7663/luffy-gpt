@@ -8,6 +8,8 @@ dataset/one-pace-subtitles/
 dataset/onepace_all_dialogue.txt
 dataset/onepace_conversational.txt
 dataset/luffy_dataset.txt
+dataset/tinyshakespeare.txt
+dataset/tokenizer_sanity_check.py
 luffy_dataset.txt
 
 # model weights (hosted on HuggingFace)
@@ -16,4 +18,6 @@ luffy_dataset.txt
 # private notes
 commands.txt
 model_dev.txt
+email_to_kacper.txt
 CLAUDE.md
+start_jupyter.sh
