@@ -2,21 +2,18 @@ import gradio as gr
 import torch
 import torch.nn.functional as F
 from huggingface_hub import hf_hub_download
+from transformers import AutoTokenizer  # kacper's suggestion: GPT-2 tokenizer
 from gpt import GPTWithStyle, _apply_sampling
 
 device = 'cpu'
 
-with open('corpus_clean.txt', 'r') as f:
-    text = f.read()
+# kacper's suggestion: use GPT-2 subword tokenizer
+tok = AutoTokenizer.from_pretrained('gpt2')
+encode = tok.encode
+decode = tok.decode
+vocab_size = tok.vocab_size
 
-characters = sorted(list(set(text)))
-vocab_size = len(characters)
-char_to_idx = {ch: i for i, ch in enumerate(characters)}
-idx_to_char = {i: ch for i, ch in enumerate(characters)}
-encode = lambda xs: [char_to_idx[x] for x in xs if x in char_to_idx]
-decode = lambda xs: ''.join([idx_to_char[x] for x in xs])
-
-model_path = hf_hub_download(repo_id='HAR5HA-YELLELA/luffy-gpt', filename='luffy_gpt_finetuned.pth')
+model_path = hf_hub_download(repo_id='HAR5HA-YELLELA/luffy-gpt', filename='luffy_gpt_gpt2tok_finetuned.pth')
 model = GPTWithStyle(vocab_size, n_embd=384, context_size=256, n_head=6, n_layer=6, n_styles=2).to(device)
 model.load_state_dict(torch.load(model_path, map_location=device))
 model.eval()
@@ -32,7 +29,7 @@ def chat(user_message):
                          temperature=0.5, top_k=30, top_p=0.85, repetition_penalty=1.2,
                          eos_tokens=eos_tokens)
     result = decode(out[0].tolist())
-    result = result.replace('<EOS>', '').split('\nUSER:')[0].strip()
+    result = result.replace('<EOS>', '').replace('EOS', '').split('\nUSER:')[0].strip()
     return result
 
 
@@ -53,7 +50,8 @@ demo = gr.Interface(
         ['What happened to Ace?'],
         ['Are you a hero?'],
         ['Do you like parties?'],
-    ]
+    ],
+    cache_examples=False
 )
 
 if __name__ == '__main__':
