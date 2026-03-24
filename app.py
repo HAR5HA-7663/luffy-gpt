@@ -32,7 +32,7 @@ def chat(user_message):
                          temperature=0.5, top_k=30, top_p=0.85, repetition_penalty=1.2,
                          eos_tokens=eos_tokens)
     result = decode(out[0].tolist())
-    result = result.split('<EOS>')[0].split('\nUSER:')[0].strip()
+    result = result.replace('<EOS>', '').split('\nUSER:')[0].strip()
     return result
 
 
