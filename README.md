@@ -28,7 +28,7 @@ python gpt.py --input dataset/processed/corpus_clean.txt \
 
 ```
 You: who are you?
-Luffy: I'm Monkey D. Luffy!
+Luffy: I'm Monkey D. Luffy. Nice to meetcha!
 
 You: are you scared?
 Luffy: Nope.
