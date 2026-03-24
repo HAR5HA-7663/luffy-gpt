@@ -155,11 +155,12 @@ class GPTWithStyle(nn.Module):
             probs = F.softmax(logits, dim=-1)
             next_tok = torch.multinomial(probs, 1)
             idx = torch.cat([idx, next_tok], dim=1)
-            # stop at EOS if detected in generated text
-            if eos_tokens is not None:
+            # kacper's suggestion: stop at EOS token
+            if eos_tokens is not None and len(eos_tokens) > 0:
                 generated = idx[0, prompt_len:].tolist()
-                gen_str = ''.join([chr(t) if t < 128 else '' for t in generated])
-                if '<EOS>' in gen_str:
+                # check if EOS sequence appears in generated tokens
+                eos_len = len(eos_tokens)
+                if len(generated) >= eos_len and generated[-eos_len:] == eos_tokens:
                     break
         # return only the generated portion (not the prompt)
         return idx[:, prompt_len:]
@@ -275,10 +276,18 @@ def _apply_sampling(logits, generated_ids, temperature, top_k, top_p, repetition
     return logits
 
 
-def load_dataset(path, use_bpe=False):
+def load_dataset(path, use_bpe=False, use_gpt2=False):
     with open(path, 'r') as f:
         text = f.read()
-    if use_bpe:
+    if use_gpt2:
+        # kacper's suggestion: use GPT-2 subword tokenizer via HuggingFace
+        from transformers import AutoTokenizer
+        tok = AutoTokenizer.from_pretrained('gpt2')
+        encode = tok.encode
+        decode = tok.decode
+        vocab_size = tok.vocab_size
+        print(f'tokenizer: GPT-2 BPE (vocab={vocab_size})')
+    elif use_bpe:
         import sys, os
         sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tokenizer'))
         from tokenizer import LuffyTokenizer
@@ -286,7 +295,7 @@ def load_dataset(path, use_bpe=False):
         encode = tok.encode
         decode = tok.decode
         vocab_size = tok.vocab_size
-        print(f'tokenizer: BPE (vocab={vocab_size})')
+        print(f'tokenizer: custom BPE (vocab={vocab_size})')
     else:
         characters = sorted(list(set(text)))
         vocab_size = len(characters)
@@ -429,6 +438,7 @@ if __name__ == '__main__':
     parser.add_argument('--tokens', type=int, default=300, help='number of tokens to generate (default: 300)')
     parser.add_argument('--interactive', action='store_true', help='interactive prompt mode (use with --eval)')
     parser.add_argument('--custom-bpe', action='store_true', dest='custom_bpe', help='use custom BPE tokenizer instead of char-level')
+    parser.add_argument('--gpt2-tokenizer', action='store_true', dest='gpt2_tokenizer', help='use GPT-2 subword tokenizer (kacper suggestion)')  # kacper's suggestion
     parser.add_argument('--metrics', action='store_true', help='report full metrics during training')
     parser.add_argument('--metric-interval', type=int, default=1000, dest='metric_interval')
     parser.add_argument('--temperature', type=float, default=1.0, help='sampling temperature (lower=sharper)')
@@ -448,7 +458,7 @@ if __name__ == '__main__':
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'device: {device}')
 
-    text, vocab_size, encode, decode = load_dataset(args.input, use_bpe=args.custom_bpe)
+    text, vocab_size, encode, decode = load_dataset(args.input, use_bpe=args.custom_bpe, use_gpt2=args.gpt2_tokenizer)
     data = torch.tensor(encode(text), dtype=torch.long)
     n = int(len(data) * 0.9)
     train_data = data[:n]
@@ -596,7 +606,7 @@ if __name__ == '__main__':
                                              eos_tokens=eos_tokens)
                         result = decode(out[0].tolist())
                         # clean up: remove <EOS> and anything after USER:
-                        result = result.split('<EOS>')[0].split('\nUSER:')[0].strip()
+                        result = result.replace('<EOS>', '').replace('EOS', '').split('\nUSER:')[0].strip()
                         print(f'Luffy: {result}\n')
                     except KeyboardInterrupt:
                         print('\nexiting')
@@ -608,7 +618,7 @@ if __name__ == '__main__':
                                      args.temperature, args.top_k, args.top_p, args.repetition_penalty,
                                      eos_tokens=eos_tokens)
                 result = decode(out[0].tolist())
-                result = result.split('<EOS>')[0].split('\nUSER:')[0].strip()
+                result = result.replace('<EOS>', '').replace('EOS', '').split('\nUSER:')[0].strip()
                 print(result)
         else:
             model = build_model(vocab_size, args, device)
